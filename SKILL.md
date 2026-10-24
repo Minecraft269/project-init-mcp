@@ -167,6 +167,9 @@ CLAUDE.md 之外的包管理器配置、`/caveman-discover` 工作流发现、`a
 - `.git` 文件里的 `gitdir:` 是仓库内容、可被伪造。只认两种完整布局：worktree 必须落在 `<repo>/.git/worktrees/<name>` 且 `commondir` 指向有 `HEAD` 的目录；submodule 必须落在 `<repo>/.git/modules/<name>` 且有 `config`。路径先 realpath 解链接再判
 - **`.git` 本身是符号链接/junction 时跳过 exclude 写入** —— 它可能指向项目外的另一个仓库
 - **`.git/info`、`.git/info/exclude` 是符号链接（含断链）或硬链接时跳过** —— 写入会穿透到别处
+- **产物文件（`.gitignore`/`.gitattributes`/`AGENTS.md`）是符号链接时整个跳过 aoci** —— aoci 是外部程序，会直接写文件，我们拦不住它跟随链接
+- **`.project-init/` 或其下的清单/备份是符号链接时跳过写入** —— 同样防写穿
+- **`.codegraph/` 是符号链接时跳过 CodeGraph** —— 外部程序会往里写
 - **不再对"项目内的 gitdir"短路放行** —— `.git` 指向 `vendor/B/.git`（嵌套仓库）时也会被拒绝
 - 各步骤有失败时返回 `isError`，标题会写明"有 N 步失败"，不会假装全部成功
 - 改动本 skill 后无需手工同步 —— `~/.claude/skills/project-init/` 应是指向本仓库的**符号链接**

@@ -8,7 +8,7 @@
 import { spawn, execFileSync } from "child_process";
 import {
   mkdtempSync, existsSync, readFileSync, writeFileSync,
-  mkdirSync, symlinkSync, chmodSync,
+  mkdirSync, symlinkSync, chmodSync, readdirSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -154,9 +154,65 @@ const check = (name, got, want) => {
   }
 
   if (linked) {
-    await callInit(dir, { aociArtifacts: "off" });
+    const r = await callInit(dir, { aociArtifacts: "off" });
+    const text = r?.result?.content?.[0]?.text || "";
     check("符号链接的 AGENTS.md 未被删除", existsSync(join(dir, "AGENTS.md")), true);
     check("链接目标的字节未变", readFileSync(outside, "utf-8"), original);
+    check("aoci 步骤明确说明因链接跳过",
+      /"step": "初始化 aoci-code"[\s\S]{0,300}符号链接/.test(text), true);
+  }
+}
+
+// ── 6. .codegraph/ 是符号链接 → CodeGraph 整步跳过 ──
+{
+  const base = mkdtempSync(join(tmpdir(), "sym-codegraph-"));
+  const dir = join(base, "proj");
+  const outside = join(base, "outside-cg");
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
+
+  let linked = false;
+  try {
+    symlinkSync(outside, join(dir, ".codegraph"), "junction");
+    linked = true;
+  } catch {
+    console.log("  skip 用例6 无法创建 junction");
+  }
+
+  if (linked) {
+    const before = readdirSync(outside).slice();
+    const r = await callInit(dir);
+    const text = r?.result?.content?.[0]?.text || "";
+    check("CodeGraph 步骤明确说明因链接跳过",
+      /"step": "初始化 CodeGraph"[\s\S]{0,300}符号链接/.test(text), true);
+    check("链接目标未被写入", readdirSync(outside).length, before.length);
+  }
+}
+
+// ── 5. .project-init/ 是符号链接 → 备份与清单都不能写到项目外 ──
+{
+  const base = mkdtempSync(join(tmpdir(), "sym-projinit-"));
+  const dir = join(base, "proj");
+  const outside = join(base, "outside");
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
+  writeFileSync(join(dir, "CLAUDE.md"), "# 用户内容\n");
+
+  let linked = false;
+  try {
+    symlinkSync(outside, join(dir, ".project-init"), "junction");
+    linked = true;
+  } catch {
+    console.log("  skip 用例5 无法创建 junction");
+  }
+
+  if (linked) {
+    const before = readdirSync(outside).slice();
+    await callInit(dir, { aociArtifacts: "off" });
+    const after = readdirSync(outside);
+    check("项目外未被写入备份或清单", after.length, before.length);
   }
 }
 

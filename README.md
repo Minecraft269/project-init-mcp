@@ -167,6 +167,8 @@ New-Item -ItemType SymbolicLink `
 | **`.git` 本身是符号链接/junction 时跳过** | 它可能指向项目外的另一个仓库 |
 | **`.git/info`、`.git/info/exclude` 是符号链接（含断链）或硬链接时跳过** | 写入会穿透到链接目标或另一路径的同一份数据 |
 | **项目内的 gitdir 也校验布局** | `.git` 指向 `vendor/B/.git`（嵌套仓库）时同样拒绝 |
+| **产物文件是符号链接时跳过 aoci** | `.gitignore`/`.gitattributes`/`AGENTS.md` 任一为链接，整个 aoci 步骤跳过（外部程序会直接写文件） |
+| **`.project-init/`、清单、备份、`.codegraph/` 是链接时跳过写入** | 防止写到项目外 |
 | **`projectPath` 必须是已存在目录** | 否则直接返回错误，不会中断在某个步骤上 |
 
 ---

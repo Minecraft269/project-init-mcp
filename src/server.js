@@ -10,7 +10,7 @@ import {
 import { execSync } from "child_process";
 import { createHash } from "crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync, realpathSync, rmSync, readdirSync } from "fs";
-import { join, basename, resolve, dirname } from "path";
+import { join, basename, resolve } from "path";
 
 // ============ 工具函数 ============
 
@@ -294,11 +294,15 @@ function initClaudeCode(projectPath) {
     return { skipped: true, reason: "CLAUDE.md 已是最新" };
   }
 
-  // 改动前备份 —— 用户的原内容要能找回来
+  // 改动前备份 —— 用户的原内容要能找回来。
+  // 目录或备份文件是符号链接时跳过：写入会穿透到项目外（已实测复现）。
   try {
     const bakDir = join(projectPath, PROJECT_INIT_DIR);
-    mkdirSync(bakDir, { recursive: true });
-    writeFileSync(join(bakDir, "CLAUDE.md.bak"), raw);
+    const bakFile = join(bakDir, "CLAUDE.md.bak");
+    if (!isSymlink(bakDir) && !isSymlink(bakFile)) {
+      mkdirSync(bakDir, { recursive: true });
+      writeFileSync(bakFile, raw);
+    }
   } catch {
     // 备份失败不阻断（内容仍在文件里，只是没有历史副本）
   }
@@ -341,7 +345,11 @@ function readManifest(projectPath) {
 }
 
 function writeManifest(projectPath, created) {
+  const dir = join(projectPath, PROJECT_INIT_DIR);
   const p = join(projectPath, PROJECT_INIT_MANIFEST);
+  // 本工具自己的目录/文件也可能是符号链接 —— 写入会穿透到项目外。
+  // 清单不写不影响正确性：读不到清单 = 没有删除授权，安全侧。
+  if (isSymlink(dir) || isSymlink(p)) return;
   try {
     // 空清单要删文件而不是跳过写 —— 否则磁盘上留着上一轮的旧清单，
     // 声称拥有已经删掉的文件。清单是删除权威，它一说谎将来就会删错东西。
@@ -349,7 +357,7 @@ function writeManifest(projectPath, created) {
       rmSync(p, { force: true });
       return;
     }
-    mkdirSync(dirname(p), { recursive: true });
+    mkdirSync(dir, { recursive: true });
     writeFileSync(
       p,
       JSON.stringify({ created: [...created].map(([name, sha]) => ({ name, sha })) }, null, 2) + "\n"
@@ -467,6 +475,16 @@ async function initAociCode(projectPath, keepArtifacts) {
     // 常带 GBK 注释，按 utf-8 解码会产生 U+FFFD 且不可逆，写回时原始字节就毁了。
     // 这三个文件是整文件读回写回、不做字符串拼接，用 Buffer 没有额外成本。
     before[rel] = existsSync(p) ? readFileSync(p) : null;
+  }
+
+  // aoci 是外部程序，它会直接写这些文件 —— 我们无法阻止它跟随符号链接。
+  // 所以只要产物（或 .aoci 目录本身）是链接，就整个跳过这一步。
+  if (symlinked.size > 0 || isSymlink(join(projectPath, ".aoci"))) {
+    const which = symlinked.size > 0 ? [...symlinked].join("、") : ".aoci";
+    return {
+      skipped: true,
+      reason: `产物或 .aoci 是符号链接（${which}），跳过 aoci 以免写穿到项目外`,
+    };
   }
 
   // 解析 aoci 可执行文件。找不到就跳过并给出可操作提示，绝不猜一个路径去执行。
@@ -590,6 +608,10 @@ const norm = (v) =>
 
 async function initCodeGraph(projectPath, force) {
   const dir = join(projectPath, ".codegraph");
+  // .codegraph 是符号链接时跳过：codegraph 是外部程序，会往里写，跟着链接就写到项目外。
+  if (isSymlink(dir)) {
+    return { skipped: true, reason: ".codegraph 是符号链接，跳过以免写穿到项目外" };
+  }
   if (existsSync(dir) && !force) {
     return { skipped: true, reason: "CodeGraph 已初始化" };
   }
@@ -1232,20 +1254,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         AOCI_ARTIFACTS.some((rel) => !existsSync(join(projectPath, rel)));
       const needCleanup = !keepArtifacts &&
         [...readManifest(projectPath).keys()].some((rel) => existsSync(join(projectPath, rel)));
-      if (mode === "full" || needArtifacts || needCleanup ||
+      // 产物或 .aoci 是符号链接时也要进函数 —— 让 initAociCode 给出
+      // "跳过以免写穿"的明确原因，而不是被外层判成"已初始化"静默跳过。
+      const aociLinked =
+        isSymlink(join(projectPath, ".aoci")) ||
+        AOCI_ARTIFACTS.some((rel) => isSymlink(join(projectPath, rel)));
+      if (mode === "full" || needArtifacts || needCleanup || aociLinked ||
           !existsSync(join(projectPath, ".aoci", "config.json"))) {
         const r = await initAociCode(projectPath, keepArtifacts);
         results.push({ step: "初始化 aoci-code", ...r });
       } else {
-        results.push({ step: "初始化 aoci-code", skipped: true });
+        results.push({ step: "初始化 aoci-code", skipped: true, reason: "aoci-code 已初始化" });
       }
 
       // 4. 初始化 CodeGraph（full 模式走 index 全量重建，不删目录）
-      if (mode === "full" || !existsSync(join(projectPath, ".codegraph"))) {
+      // .codegraph 是符号链接时也要进函数 —— 否则 existsSync 跟随链接判成
+      // "已初始化"，跳过原因就丢失了（写入虽然没发生，但用户不知道原因）。
+      const cgDir = join(projectPath, ".codegraph");
+      if (mode === "full" || !existsSync(cgDir) || isSymlink(cgDir)) {
         const r = await initCodeGraph(projectPath, mode === "full");
         results.push({ step: "初始化 CodeGraph", ...r });
       } else {
-        results.push({ step: "初始化 CodeGraph", skipped: true });
+        results.push({ step: "初始化 CodeGraph", skipped: true, reason: "CodeGraph 已初始化" });
       }
 
       // 5. OpenCodeReview
