@@ -54,6 +54,13 @@ const check = (name, got, want) => {
   console.log(`  ${ok ? "ok  " : "FAIL"} ${name}: ${got}${ok ? "" : ` (期望 ${want})`}`);
 };
 
+// CI 上没有 aoci —— 依赖"aoci 会生成产物"的用例跳过而非失败。
+// 这些用例测的是本工具对 aoci 产物的处理，aoci 不在时前提不成立。
+const aociMissing = (r) =>
+  /"step": "初始化 aoci-code"[\s\S]{0,400}找不到 aoci/.test(
+    r?.result?.content?.[0]?.text || ""
+  );
+
 // ── 用例1：旧格式清单（无指纹）→ 本轮新建的产物照删，但清单不能被"升级"成授权 ──
 // 清单声称拥有 AGENTS.md/.gitattributes，但两者都不存在。aoci init 会把它们造出来，
 // 这些文件 100% 由 aoci 生成，off 该删。关键是删除之后清单不能留下任何
@@ -64,15 +71,19 @@ const check = (name, got, want) => {
   writeFileSync(join(dir, MANIFEST), JSON.stringify({ created: ["AGENTS.md", ".gitattributes"] }));
   const r = await callProjectInit(dir, { mode: "incremental", aociArtifacts: "off" });
   check("用例1 调用成功", r?.result?.content?.[0]?.text?.includes("初始化完成"), true);
-  // 本轮由 aoci 新建的产物，off 当场清掉（不必等第二轮）
-  check("用例1 本轮新建的产物被清理", existsSync(join(dir, "AGENTS.md")), false);
-  // 清单要么被删、要么每条 sha 都是 null —— 绝不能留下可删的真实指纹
-  const mp = join(dir, MANIFEST);
-  if (existsSync(mp)) {
-    const m = JSON.parse(readFileSync(mp, "utf-8"));
-    check("用例1 残留清单的指纹全为 null", m.created.every((e) => e.sha === null), true);
+  if (aociMissing(r)) {
+    console.log("  skip 用例1 其余断言：aoci 不可用");
   } else {
-    check("用例1 残留清单的指纹全为 null（清单已清除）", true, true);
+    // 本轮由 aoci 新建的产物，off 当场清掉（不必等第二轮）
+    check("用例1 本轮新建的产物被清理", existsSync(join(dir, "AGENTS.md")), false);
+    // 清单要么被删、要么每条 sha 都是 null —— 绝不能留下可删的真实指纹
+    const mp = join(dir, MANIFEST);
+    if (existsSync(mp)) {
+      const m = JSON.parse(readFileSync(mp, "utf-8"));
+      check("用例1 残留清单的指纹全为 null", m.created.every((e) => e.sha === null), true);
+    } else {
+      check("用例1 残留清单的指纹全为 null（清单已清除）", true, true);
+    }
   }
 }
 
@@ -94,13 +105,17 @@ const check = (name, got, want) => {
   // aoci init 要求 git 仓库，否则不生成 AGENTS.md/.gitattributes
   execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
   // 第一轮：on，创建产物并记下指纹
-  await callProjectInit(dir, { mode: "incremental", aociArtifacts: "on" });
+  const r1 = await callProjectInit(dir, { mode: "incremental", aociArtifacts: "on" });
   const afterOn = existsSync(join(dir, "AGENTS.md"));
   // 第二轮：off，用户没动过 -> 该删
   await callProjectInit(dir, { mode: "incremental", aociArtifacts: "off" });
-  check("用例5 首轮 on 创建了 AGENTS.md", afterOn, true);
-  check("用例5 切 off 后本工具造的产物被删除", existsSync(join(dir, "AGENTS.md")), false);
-  check("用例5 切 off 后 .gitattributes 被删除", existsSync(join(dir, ".gitattributes")), false);
+  if (aociMissing(r1)) {
+    console.log("  skip 用例5：aoci 不可用，无法验证 on→off 往返");
+  } else {
+    check("用例5 首轮 on 创建了 AGENTS.md", afterOn, true);
+    check("用例5 切 off 后本工具造的产物被删除", existsSync(join(dir, "AGENTS.md")), false);
+    check("用例5 切 off 后 .gitattributes 被删除", existsSync(join(dir, ".gitattributes")), false);
+  }
 }
 
 // ── 用例6：on → off，但用户改过产物 → 绝不删除 ──
@@ -213,20 +228,24 @@ const check = (name, got, want) => {
 {
   const dir = mkdtempSync(join(tmpdir(), "man-roundtrip2-"));
   execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
-  await callProjectInit(dir, { mode: "incremental", aociArtifacts: "on" });
+  const r1 = await callProjectInit(dir, { mode: "incremental", aociArtifacts: "on" });
   const made = existsSync(join(dir, "AGENTS.md"));
   await callProjectInit(dir, { mode: "incremental", aociArtifacts: "off" });
-  check("用例10 首轮 on 创建了 AGENTS.md", made, true);
-  check("用例10 用户没改过 → 切 off 真删", existsSync(join(dir, "AGENTS.md")), false);
-  // 与用例9 互为对照：用户没改过时，指纹必须被保留（非 null），否则就是
-  // 把功能修成了"永不删除"。两个用例必须同时成立。
-  const mp10 = join(dir, ".project-init", "project-init-manifest.json");
-  if (existsSync(mp10)) {
-    const m10 = JSON.parse(readFileSync(mp10, "utf-8"));
-    check("用例10 删除后清单不含残留的 AGENTS.md",
-      !m10.created.some((e) => e.name === "AGENTS.md"), true);
+  if (aociMissing(r1)) {
+    console.log("  skip 用例10：aoci 不可用");
   } else {
-    check("用例10 删除后清单不含残留的 AGENTS.md（清单已清除）", true, true);
+    check("用例10 首轮 on 创建了 AGENTS.md", made, true);
+    check("用例10 用户没改过 → 切 off 真删", existsSync(join(dir, "AGENTS.md")), false);
+    // 与用例9 互为对照：用户没改过时，指纹必须被保留（非 null），否则就是
+    // 把功能修成了"永不删除"。两个用例必须同时成立。
+    const mp10 = join(dir, ".project-init", "project-init-manifest.json");
+    if (existsSync(mp10)) {
+      const m10 = JSON.parse(readFileSync(mp10, "utf-8"));
+      check("用例10 删除后清单不含残留的 AGENTS.md",
+        !m10.created.some((e) => e.name === "AGENTS.md"), true);
+    } else {
+      check("用例10 删除后清单不含残留的 AGENTS.md（清单已清除）", true, true);
+    }
   }
 }
 

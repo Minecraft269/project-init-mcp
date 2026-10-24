@@ -8,7 +8,7 @@
 import { spawn, execFileSync } from "child_process";
 import {
   mkdtempSync, existsSync, readFileSync, writeFileSync,
-  mkdirSync, symlinkSync, chmodSync, readdirSync,
+  mkdirSync, symlinkSync, linkSync, chmodSync, readdirSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -213,6 +213,75 @@ const check = (name, got, want) => {
     await callInit(dir, { aociArtifacts: "off" });
     const after = readdirSync(outside);
     check("项目外未被写入备份或清单", after.length, before.length);
+  }
+}
+
+// ── 7-9. 硬链接：写入会改到另一路径的同一份数据 ──
+// symlink 检查覆盖不到硬链接（isSymbolicLink 为 false），必须单独判 nlink。
+{
+  // 7. CLAUDE.md 是硬链接
+  const base = mkdtempSync(join(tmpdir(), "hl-cmd-"));
+  const proj = join(base, "proj");
+  mkdirSync(proj, { recursive: true });
+  execFileSync("git", ["init", "-q", proj], { stdio: "ignore" });
+  const outside = join(base, "outside.md");
+  const original = "# 项目外\n珍贵内容\n";
+  writeFileSync(outside, original);
+  let linked = true;
+  try {
+    linkSync(outside, join(proj, "CLAUDE.md"));
+  } catch {
+    linked = false;
+    console.log("  skip 用例7 无法创建硬链接");
+  }
+  if (linked) {
+    await callInit(proj);
+    check("用例7 CLAUDE.md 硬链接目标未被改", readFileSync(outside, "utf-8"), original);
+  }
+}
+
+{
+  // 8. CLAUDE.md.bak 是硬链接
+  const base = mkdtempSync(join(tmpdir(), "hl-bak-"));
+  const proj = join(base, "proj");
+  mkdirSync(join(proj, ".project-init"), { recursive: true });
+  execFileSync("git", ["init", "-q", proj], { stdio: "ignore" });
+  writeFileSync(join(proj, "CLAUDE.md"), "# 用户\n");
+  const outside = join(base, "outside.bak");
+  const original = "# 项目外备份\n珍贵\n";
+  writeFileSync(outside, original);
+  let linked = true;
+  try {
+    linkSync(outside, join(proj, ".project-init", "CLAUDE.md.bak"));
+  } catch {
+    linked = false;
+    console.log("  skip 用例8 无法创建硬链接");
+  }
+  if (linked) {
+    await callInit(proj, { mode: "full" });
+    check("用例8 备份硬链接目标未被改", readFileSync(outside, "utf-8"), original);
+  }
+}
+
+{
+  // 9. manifest 是硬链接
+  const base = mkdtempSync(join(tmpdir(), "hl-man-"));
+  const proj = join(base, "proj");
+  mkdirSync(join(proj, ".project-init"), { recursive: true });
+  execFileSync("git", ["init", "-q", proj], { stdio: "ignore" });
+  const outside = join(base, "outside-manifest.json");
+  const original = '{"note":"项目外"}\n';
+  writeFileSync(outside, original);
+  let linked = true;
+  try {
+    linkSync(outside, join(proj, ".project-init", "project-init-manifest.json"));
+  } catch {
+    linked = false;
+    console.log("  skip 用例9 无法创建硬链接");
+  }
+  if (linked) {
+    await callInit(proj, { aociArtifacts: "off" });
+    check("用例9 清单硬链接目标未被改", readFileSync(outside, "utf-8"), original);
   }
 }
 
