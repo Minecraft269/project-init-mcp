@@ -8,10 +8,8 @@ import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { join } from "path";
 
-const HOOK = join(
-  fileURLToPath(new URL(".", import.meta.url)),
-  "..", "..", ".project-init", "hook.js"
-);
+// hook.js 在仓库根 —— 用 src 的上一级定位，不按目录名硬编码（CI 上名字不同）
+const HOOK = join(fileURLToPath(new URL(".", import.meta.url)), "..", "hook.js");
 
 const fires = (p) => {
   const r = spawnSync("node", [HOOK], {

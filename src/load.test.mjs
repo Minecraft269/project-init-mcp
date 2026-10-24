@@ -5,22 +5,25 @@
 // server 起不来、schema 和实现漂移、skill 加载了旧副本。
 // 判据每次改 server.js 的 schema 或 SKILL.md 都要跑：`node src/load.test.mjs`
 import { spawn } from "child_process";
-import { existsSync, readFileSync, lstatSync, readlinkSync } from "fs";
+import { existsSync, readFileSync, lstatSync, readlinkSync, realpathSync } from "fs";
 import { fileURLToPath } from "url";
 import { join } from "path";
 
-const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
-const SERVER = join(ROOT, ".project-init-mcp", "src", "server.js");
+// 仓库根 = src 的上一级。不要按目录名硬编码，否则 CI 上 checkout 到
+// 别的目录名就全挂。
+const REPO = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+const SERVER = join(REPO, "src", "server.js");
 // 唯一源在仓库根 —— 仓库是唯一真相，副本只是入口
-const SKILL_SRC = join(ROOT, ".project-init-mcp", "SKILL.md");
-const HOOK_SRC = join(ROOT, ".project-init-mcp", "hook.js");
-// Claude Code 从这里加载（.claude 是指向 claude-code-config 的 Junction）。
-// 它必须是**符号链接**指向仓库 —— 实体副本必然漂移（栽过两次）。
-const SKILL_DIR = join(
-  ROOT, "Claude Code", "claude-code-config", "skills", "project-init"
-);
+const SKILL_SRC = join(REPO, "SKILL.md");
+const HOOK_SRC = join(REPO, "hook.js");
+// Claude Code 实际加载的位置是**本机安装**，CI 上不存在。
+// 缺失时相关断言跳过（不算失败），否则 CI 永远红。
+const SKILL_DIR =
+  process.env.PROJECT_INIT_SKILL_DIR ||
+  join(REPO, "..", "Claude Code", "claude-code-config", "skills", "project-init");
 const SKILL_COPY = join(SKILL_DIR, "SKILL.md");
 const HOOK_COPY = join(SKILL_DIR, "hook.js");
+const HAS_INSTALL = existsSync(SKILL_DIR);
 
 let bad = 0;
 const ok = (name, cond, detail = "") => {
@@ -124,23 +127,27 @@ ok("源 hook.js 存在", existsSync(HOOK_SRC));
 
 // 判据不再是"两份内容一致"——那是**事后检测**，漂移照样会发生，只是被测出来。
 // 现在 Claude Code 加载的路径必须是**符号链接**指向仓库：漂移变成物理上不可能。
-for (const [label, linkPath, srcPath] of [
-  ["SKILL.md", SKILL_COPY, SKILL_SRC],
-  ["hook.js", HOOK_COPY, HOOK_SRC],
-]) {
-  if (!existsSync(linkPath)) {
-    ok(`副本 ${label} 存在`, false, linkPath);
-    continue;
-  }
-  const isLink = lstatSync(linkPath).isSymbolicLink();
-  ok(`${label} 副本是符号链接（实体副本必然漂移）`, isLink,
-    isLink ? "" : "是实体文件，请改回链接");
-  if (isLink) {
-    const target = readlinkSync(linkPath);
-    ok(`${label} 链接指向仓库源`, target.replace(/\\/g, "/").endsWith(`.project-init-mcp/${label}`),
-      target);
-    // 链接必须能真正解析出内容（Windows 上断了会读不到）
-    ok(`${label} 链接可解析`, existsSync(linkPath) && readFileSync(linkPath).length > 0);
+if (!HAS_INSTALL) {
+  console.log(`  skip 本机未安装 skill（${SKILL_DIR}），跳过副本检查`);
+} else {
+  for (const [label, linkPath, srcPath] of [
+    ["SKILL.md", SKILL_COPY, SKILL_SRC],
+    ["hook.js", HOOK_COPY, HOOK_SRC],
+  ]) {
+    if (!existsSync(linkPath)) {
+      ok(`副本 ${label} 存在`, false, linkPath);
+      continue;
+    }
+    const isLink = lstatSync(linkPath).isSymbolicLink();
+    ok(`${label} 副本是符号链接（实体副本必然漂移）`, isLink,
+      isLink ? "" : "是实体文件，请改回链接");
+    if (isLink) {
+      // 用真实路径比对，不用字符串后缀 —— 后者在盘符大小写/相对路径下会误判
+      const sameFile = realpathSync(linkPath) === realpathSync(srcPath);
+      ok(`${label} 链接指向仓库源`, sameFile, readlinkSync(linkPath));
+      // 链接必须能真正解析出内容（Windows 上断了会读不到）
+      ok(`${label} 链接可解析`, existsSync(linkPath) && readFileSync(linkPath).length > 0);
+    }
   }
 }
 

@@ -1,5 +1,8 @@
 # project-init
 
+[![CI](https://github.com/Minecraft269/project-init-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Minecraft269/project-init-mcp/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Minecraft269/project-init-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/Minecraft269/project-init-mcp/actions/workflows/codeql.yml)
+
 Claude Code 的项目初始化工具：自动检测技术栈、生成 `CLAUDE.md`、建立 aoci-code 认知索引与 CodeGraph 代码图谱、按需写入 `.git/info/exclude` 个人级排除。
 
 三层结构，任一层都能独立工作：
@@ -172,6 +175,24 @@ New-Item -ItemType SymbolicLink `
 | **`projectPath` 必须是已存在目录** | 否则直接返回错误，不会中断在某个步骤上 |
 
 ---
+
+## 开发
+
+```bash
+npm run lint    # ESLint：未定义变量 / 未使用变量 / 重复声明 / 不可达代码
+npm test        # 7 组回归测试
+npm run check   # 两者一起跑
+```
+
+CI 在 `.github/workflows/`：
+
+| Workflow | 触发 | 内容 |
+|---|---|---|
+| `ci.yml` | push / PR | ESLint + 测试矩阵（Ubuntu/Windows × Node 20/22） |
+| `codeql.yml` | push / PR / 每周一 | CodeQL 静态分析（`security-and-quality` 查询） |
+| `dependency-review.yml` | PR | 拦截新引入的高危漏洞依赖 |
+
+CI 上没有 aoci / codegraph，相关步骤会自动跳过；本机安装的 skill 目录不存在时，副本一致性检查也会跳过而非失败。
 
 ## 测试
 

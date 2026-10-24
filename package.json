@@ -6,9 +6,14 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node src/backup-regex.test.mjs && node src/manifest.test.mjs && node src/gitdir-boundary.test.mjs && node src/hook.test.mjs && node src/load.test.mjs && node src/exclude-encoding.test.mjs && node src/write-safety.test.mjs"
+    "test": "node src/backup-regex.test.mjs && node src/manifest.test.mjs && node src/gitdir-boundary.test.mjs && node src/hook.test.mjs && node src/load.test.mjs && node src/exclude-encoding.test.mjs && node src/write-safety.test.mjs",
+    "lint": "eslint .",
+    "check": "npm run lint && npm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.4"
   }
 }

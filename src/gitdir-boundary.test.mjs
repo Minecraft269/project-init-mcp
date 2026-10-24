@@ -379,5 +379,27 @@ const check = (name, got, want) => {
   }
 }
 
+// ── 用例14：形状合法的伪造 worktree（路径含 /.git/worktrees/，commondir 指向外部）──
+// 只校验"路径含 /.git/worktrees/ + common 有 HEAD"不够：
+// 任意目录放个名为 HEAD 的文件就满足，规则会被写进那个目录（已实测）。
+// 必须校验 common 是真 git 目录（有 objects/refs），且私有目录真的是 <common>/worktrees/<name>。
+{
+  const base = mkdtempSync(join(tmpdir(), "gd-fakewt-"));
+  const proj = join(base, "proj");
+  const target = join(base, "target");
+  const priv = join(proj, "a", ".git", "worktrees", "x");
+  mkdirSync(priv, { recursive: true });
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(priv, "HEAD"), "ref: refs/heads/main");
+  writeFileSync(join(priv, "commondir"), target.replace(/\\/g, "/"));
+  writeFileSync(join(target, "HEAD"), "ref: refs/heads/main");
+  writeFileSync(join(proj, ".git"), `gitdir: ${priv.replace(/\\/g, "/")}`);
+
+  const r = await callProjectInit(proj);
+  const text = r?.result?.content?.[0]?.text || "";
+  check("用例14 伪造 worktree 被拒绝", text.includes("非 git 仓库"), true);
+  check("用例14 目标目录未创建 info", existsSync(join(target, "info")), false);
+}
+
 console.log(bad === 0 ? "\n全部通过" : `\n${bad} 个失败`);
 process.exit(bad ? 1 : 0);

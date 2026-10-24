@@ -10,7 +10,7 @@ import {
 import { execSync } from "child_process";
 import { createHash } from "crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync, realpathSync, rmSync, readdirSync } from "fs";
-import { join, basename, resolve } from "path";
+import { join, basename, resolve, dirname } from "path";
 
 // ============ 工具函数 ============
 
@@ -232,10 +232,10 @@ function initClaudeCode(projectPath) {
 
   // CLAUDE.md 是符号链接时**绝不写入** —— 跟随链接会改到项目外的文件，
   // 那是用户自己的数据，我们没有任何理由碰它。
-  if (isSymlink(claudeMdPath)) {
+  if (isSymlink(claudeMdPath) || isHardLinked(claudeMdPath)) {
     return {
       skipped: true,
-      reason: "CLAUDE.md 是符号链接，未改动（跟随链接会写到项目外的文件）",
+      reason: "CLAUDE.md 是符号链接或硬链接，未改动（写入会穿透到另一个文件）",
     };
   }
 
@@ -299,7 +299,7 @@ function initClaudeCode(projectPath) {
   try {
     const bakDir = join(projectPath, PROJECT_INIT_DIR);
     const bakFile = join(bakDir, "CLAUDE.md.bak");
-    if (!isSymlink(bakDir) && !isSymlink(bakFile)) {
+    if (!isSymlink(bakDir) && !isSymlink(bakFile) && !isHardLinked(bakFile)) {
       mkdirSync(bakDir, { recursive: true });
       writeFileSync(bakFile, raw);
     }
@@ -349,7 +349,7 @@ function writeManifest(projectPath, created) {
   const p = join(projectPath, PROJECT_INIT_MANIFEST);
   // 本工具自己的目录/文件也可能是符号链接 —— 写入会穿透到项目外。
   // 清单不写不影响正确性：读不到清单 = 没有删除授权，安全侧。
-  if (isSymlink(dir) || isSymlink(p)) return;
+  if (isSymlink(dir) || isSymlink(p) || isHardLinked(p)) return;
   try {
     // 空清单要删文件而不是跳过写 —— 否则磁盘上留着上一轮的旧清单，
     // 声称拥有已经删掉的文件。清单是删除权威，它一说谎将来就会删错东西。
@@ -370,7 +370,6 @@ function writeManifest(projectPath, created) {
 // 从重组后的 next 里切出托管块的**条目部分**（不含标记行 ——
 // prefix 已经写到标记行之后了，再带一次会写出两个标记）。
 function nextManagedOnly(nextStr, hasBlock) {
-  const mk = `${MANAGED_BLOCK_MARKER}\n`;
   if (!hasBlock) return toAddOnly(nextStr);
   const lines = nextStr.split("\n");
   const start = lines.findIndex((l) => l.trim() === MANAGED_BLOCK_MARKER);
@@ -405,7 +404,6 @@ function rewriteManagedBlockBytes(raw, nextManaged) {
     blockEnd = raw.length;
   }
   if (blockEnd <= afterMarker) return null; // 块结构异常，放弃
-  const block = raw.slice(afterMarker, blockEnd).toString("utf-8");
   // nextManaged 含完整块内容（标记行 + 条目行），去掉尾部换行后拼
   const body = nextManaged.endsWith("\n") ? nextManaged.slice(0, -1) : nextManaged;
   const prefix = raw.slice(0, afterMarker);
@@ -721,13 +719,24 @@ function hasTrustedLayout(privateDir) {
     if (!normed.includes("/.git/worktrees/")) return false;
     try {
       const common = realOrNull(resolve(privateDir, readFileSync(commonFile, "utf-8").trim()));
-      return !!common && existsSync(join(common, "HEAD"));
+      if (!common) return false;
+      // common 必须像个**真的** git 目录。只查 HEAD 不够 —— 任意目录放个
+      // 名为 HEAD 的文件就能满足，伪造 worktree 会把规则写进那个目录（已实测）。
+      if (!existsSync(join(common, "objects")) || !existsSync(join(common, "refs"))) return false;
+      // 且私有目录必须真的是 <common>/worktrees/<name>。
+      // 否则攻击者可以自建 a/.git/worktrees/x 并把 commondir 指向任意目录。
+      if (!samePath(common, resolve(dirname(dirname(privateDir))))) return false;
+      return true;
     } catch {
       return false;
     }
   }
 
-  return normed.includes("/.git/modules/") && existsSync(join(privateDir, "config"));
+  return (
+    normed.includes("/.git/modules/") &&
+    existsSync(join(privateDir, "config")) &&
+    existsSync(join(privateDir, "objects"))
+  );
 }
 
 // 路径里的符号链接必须先解开再判 —— resolve() 只做字符串归一化，不解链接。
@@ -748,6 +757,15 @@ function isSymlink(p) {
   } catch {
     return false;
   }
+}
+
+// 两个路径是否指向同一位置（解开符号链接后比较，Windows 大小写不敏感）
+function samePath(a, b) {
+  const na = realOrNull(a);
+  const nb = realOrNull(b);
+  if (!na || !nb) return false;
+  const norm = (s) => s.replace(/[\\/]+$/, "").toLowerCase();
+  return norm(na) === norm(nb);
 }
 
 // 是否硬链接（nlink > 1）。写入硬链接会改到另一个路径下的同一份数据。
