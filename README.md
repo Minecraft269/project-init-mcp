@@ -163,7 +163,10 @@ New-Item -ItemType SymbolicLink `
 | **`CLAUDE.md` 非 UTF-8 时跳过不改** | 托管片段要按字节切位置，不可逆解码会毁原文 |
 | **`CLAUDE.md` 是符号链接时拒绝写入** | 跟随链接会改到项目外的文件 |
 | **写入失败不冒泡** | 只读文件返回该步失败 + 原因，**前面已完成步骤的结果照常返回** |
-| **`.git` 文件里的 `gitdir:` 可被伪造** | 指向项目外时必须具备合法布局（worktree 有 `commondir`／submodule 在 `.git/modules/` 下且有 `config`），否则跳过 |
+| **`.git` 文件里的 `gitdir:` 可被伪造** | 只认两种完整布局：worktree 必须在 `<repo>/.git/worktrees/<name>` 且 `commondir` 指向有 `HEAD` 的目录；submodule 必须在 `<repo>/.git/modules/<name>` 且有 `config`。路径先 realpath 解链接再判 |
+| **`.git` 本身是符号链接/junction 时跳过** | 它可能指向项目外的另一个仓库 |
+| **`.git/info`、`.git/info/exclude` 是符号链接（含断链）或硬链接时跳过** | 写入会穿透到链接目标或另一路径的同一份数据 |
+| **项目内的 gitdir 也校验布局** | `.git` 指向 `vendor/B/.git`（嵌套仓库）时同样拒绝 |
 | **`projectPath` 必须是已存在目录** | 否则直接返回错误，不会中断在某个步骤上 |
 
 ---

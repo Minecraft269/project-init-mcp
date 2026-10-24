@@ -164,7 +164,10 @@ CLAUDE.md 之外的包管理器配置、`/caveman-discover` 工作流发现、`a
 - **写入失败不冒泡**：只读的 `CLAUDE.md` 或 `.git/info/exclude` 会返回该步失败 + 原因，**前面已完成的步骤结果照常返回**（不会变成整个调用的 JSON-RPC error）
 - **`CLAUDE.md` 是符号链接时不写入** —— 跟随链接会改到项目外的文件，返回 skipped 并说明原因
 - `CLAUDE.md` 是非 UTF-8 编码（如 GBK）时**跳过不改动**并回报 —— 托管片段要按字节切位置，不可逆的解码会毁掉用户原文
-- `.git` 文件里的 `gitdir:` 是仓库内容、可被伪造。指向项目外时必须具备合法布局才认：worktree（有 `commondir`）或 submodule（路径在 `.git/modules/` 下且有 `config`）
+- `.git` 文件里的 `gitdir:` 是仓库内容、可被伪造。只认两种完整布局：worktree 必须落在 `<repo>/.git/worktrees/<name>` 且 `commondir` 指向有 `HEAD` 的目录；submodule 必须落在 `<repo>/.git/modules/<name>` 且有 `config`。路径先 realpath 解链接再判
+- **`.git` 本身是符号链接/junction 时跳过 exclude 写入** —— 它可能指向项目外的另一个仓库
+- **`.git/info`、`.git/info/exclude` 是符号链接（含断链）或硬链接时跳过** —— 写入会穿透到别处
+- **不再对"项目内的 gitdir"短路放行** —— `.git` 指向 `vendor/B/.git`（嵌套仓库）时也会被拒绝
 - 各步骤有失败时返回 `isError`，标题会写明"有 N 步失败"，不会假装全部成功
 - 改动本 skill 后无需手工同步 —— `~/.claude/skills/project-init/` 应是指向本仓库的**符号链接**
 

@@ -134,5 +134,31 @@ const check = (name, got, want) => {
   try { chmodSync(ex, 0o666); } catch { /* ignore */ }
 }
 
+// ── 4. TRACKED 文件（AGENTS.md 等）是符号链接 → 不读不写不删 ──
+// 否则还原会穿透写到链接目标，那是项目外的文件。
+{
+  const base = mkdtempSync(join(tmpdir(), "sym-tracked-"));
+  const dir = join(base, "proj");
+  mkdirSync(dir, { recursive: true });
+  execFileSync("git", ["init", "-q", dir], { stdio: "ignore" });
+  const outside = join(base, "OUTSIDE-AGENTS.md");
+  const original = "# 项目外的重要文件\n不要动我\n";
+  writeFileSync(outside, original);
+
+  let linked = false;
+  try {
+    symlinkSync(outside, join(dir, "AGENTS.md"), "file");
+    linked = true;
+  } catch {
+    console.log("  skip 用例4 无法创建文件符号链接");
+  }
+
+  if (linked) {
+    await callInit(dir, { aociArtifacts: "off" });
+    check("符号链接的 AGENTS.md 未被删除", existsSync(join(dir, "AGENTS.md")), true);
+    check("链接目标的字节未变", readFileSync(outside, "utf-8"), original);
+  }
+}
+
 console.log(bad === 0 ? "\n全部通过" : `\n${bad} 个失败`);
 process.exit(bad ? 1 : 0);

@@ -9,8 +9,8 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { execSync } from "child_process";
 import { createHash } from "crypto";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync, rmSync, readdirSync } from "fs";
-import { join, basename, resolve, dirname, sep } from "path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, lstatSync, realpathSync, rmSync, readdirSync } from "fs";
+import { join, basename, resolve, dirname } from "path";
 
 // ============ 工具函数 ============
 
@@ -232,7 +232,7 @@ function initClaudeCode(projectPath) {
 
   // CLAUDE.md 是符号链接时**绝不写入** —— 跟随链接会改到项目外的文件，
   // 那是用户自己的数据，我们没有任何理由碰它。
-  if (existsSync(claudeMdPath) && lstatSync(claudeMdPath).isSymbolicLink()) {
+  if (isSymlink(claudeMdPath)) {
     return {
       skipped: true,
       reason: "CLAUDE.md 是符号链接，未改动（跟随链接会写到项目外的文件）",
@@ -451,8 +451,18 @@ async function initAociCode(projectPath, keepArtifacts) {
     existsSync(projectPath) ? readdirSync(projectPath) : []
   );
   const before = {};
+  const symlinked = new Set();
   for (const rel of TRACKED) {
     const p = join(projectPath, rel);
+    // 符号链接一律不碰：读会跟随目标，还原会穿透写到项目外的文件。
+    // 记下来，后面三个循环都跳过它。
+    // 用 isSymlink 而不是 existsSync + lstat —— 断链时 existsSync 为 false，
+    // 保护会被跳过，随后 writeFileSync 会跟随断链把目标创建到项目外。
+    if (isSymlink(p)) {
+      symlinked.add(rel);
+      before[rel] = null;
+      continue;
+    }
     // 用 Buffer 不用 "utf-8" —— .gitignore / .gitattributes 在中文 Windows 项目里
     // 常带 GBK 注释，按 utf-8 解码会产生 U+FFFD 且不可逆，写回时原始字节就毁了。
     // 这三个文件是整文件读回写回、不做字符串拼接，用 Buffer 没有额外成本。
@@ -482,11 +492,13 @@ async function initAociCode(projectPath, keepArtifacts) {
   const fingerprint = (buf) => createHash("sha256").update(buf).digest("hex").slice(0, 16);
   const claimed = new Map(manifest);
   for (const rel of TRACKED) {
+    if (symlinked.has(rel)) continue;
     if (before[rel] === null && existsSync(join(projectPath, rel))) claimed.set(rel, null);
   }
 
   for (const rel of TRACKED) {
     const p = join(projectPath, rel);
+    if (symlinked.has(rel)) continue; // 符号链接不参与删除/还原
     // 本轮是否允许按指纹删除：只有 AOCI_ARTIFACTS 且 aociArtifacts="off"。
     // .gitignore 永远只还原不删。
     const deletable = AOCI_ARTIFACTS.includes(rel) && !keepArtifacts;
@@ -540,7 +552,10 @@ async function initAociCode(projectPath, keepArtifacts) {
 // 被当成"工具造的"记进指纹，下一轮 off 就会 rmSync 掉用户的手写内容。
   // claimed 是 manifest 的副本（见上），指纹写进了 claimed，要同步回 manifest。
   manifest.clear();
-  for (const [rel, sha] of claimed) manifest.set(rel, sha);
+  for (const [rel, sha] of claimed) {
+    // 符号链接归用户所有，永不可删 —— 无论旧清单里记了什么指纹
+    manifest.set(rel, symlinked.has(rel) ? null : sha);
+  }
 
   // 清掉本次 aoci init 新产生的备份文件（调用前就有的历史备份一律保留）。
   // 前缀从 AOCI_ARTIFACTS 派生而非另写一份 —— aoci 改了什么文件，
@@ -665,50 +680,85 @@ function splitManagedBlock(lines) {
 //   所以还要再读私有目录下的 commondir（相对路径，如 "../.."），
 //   解析出的 common dir 才是 exclude 真正生效的位置。
 // .git 文件与 commondir 文件的内容都写在仓库里，克隆一个恶意仓库就能让它们
-// 指向项目外的任意 .git。所以 gitdir 指向项目外时，必须像个真正的 git 私有目录。
-// 三种合法布局（均实测）：
-//   普通仓库   .git 是目录，直接返回，不走这里
-//   worktree   私有目录里有 commondir，指向主仓库 .git
-//   submodule  私有目录在 <repo>/.git/modules/<name>/ 下 —— 必须同时有 HEAD 和 config
-// 光有 HEAD 不够：恶意构造也能造一个带 HEAD 的假 .git。
+// 指向项目外的任意 .git。所以 gitdir 指向项目外时，必须是个**结构合法**的 git 私有目录。
+// 两种合法布局（均实测），判据都要求完整路径段 —— 只"有 HEAD"或"有 commondir"太松，
+// 恶意构造随便一个目录都能满足：
+//   worktree   <repo>/.git/worktrees/<name>，且 commondir 指向有 HEAD 的目录
+//   submodule  <repo>/.git/modules/<name>，且有 config
+//
+// 注意：不再对"项目内的 gitdir"短路放行 —— 那会让 `.git` 文件指向
+// `vendor/B/.git`（嵌套仓库）时，把 A 的排除规则写进 B。git 只认这两种布局，
+// 其余一律不可信。
 // 宁可跳过 exclude 写入，也不能把 A 项目的排除规则写进 B 仓库。
-function hasTrustedLayout(privateDir, projectPath) {
-  if (insideWorkTree(privateDir, projectPath)) return true;
+function hasTrustedLayout(privateDir) {
   if (!existsSync(join(privateDir, "HEAD"))) return false;
+  const normed = privateDir.toLowerCase().replace(/[\\/]+/g, "/");
 
   const commonFile = join(privateDir, "commondir");
   if (existsSync(commonFile)) {
+    if (!normed.includes("/.git/worktrees/")) return false;
     try {
-      const common = resolve(privateDir, readFileSync(commonFile, "utf-8").trim());
-      return existsSync(common) && existsSync(join(common, "HEAD"));
+      const common = realOrNull(resolve(privateDir, readFileSync(commonFile, "utf-8").trim()));
+      return !!common && existsSync(join(common, "HEAD"));
     } catch {
       return false;
     }
   }
 
-  // submodule 布局：路径必须在 .git/modules/ 下，且有 config（HEAD 单独不够）
-  return (
-    privateDir.toLowerCase().includes(`${sep}modules${sep}`) &&
-    existsSync(join(privateDir, "config"))
-  );
+  return normed.includes("/.git/modules/") && existsSync(join(privateDir, "config"));
 }
 
-function insideWorkTree(candidate, projectPath) {
-  const norm = (p) => {
-    const abs = resolve(p);
-    return abs.replace(/[\\/]+$/, "").toLowerCase();
-  };
-  const c = norm(candidate);
-  const root = norm(projectPath);
-  // 结尾补分隔符，"D:\a\evil2" 不会被误判为在 "D:\a\evil" 内
-  return c === root || c.startsWith(root + sep);
+// 路径里的符号链接必须先解开再判 —— resolve() 只做字符串归一化，不解链接。
+// 不解开的话，`x/.git/modules/pkg` 实际指向 victim 也能通过字符串判据（已实测复现）。
+function realOrNull(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
 }
 
+// 判断是否符号链接。**不能先 existsSync** —— 它对断链返回 false，
+// 那样保护会被跳过，随后的 writeFileSync 会跟随断链把目标创建到项目外。
+function isSymlink(p) {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+// 是否硬链接（nlink > 1）。写入硬链接会改到另一个路径下的同一份数据。
+// Windows NTFS 支持硬链接，git 文件不会是硬链接 —— 命中就当不可信。
+function isHardLinked(p) {
+  try {
+    return statSync(p).nlink > 1;
+  } catch {
+    return false;
+  }
+}
+
+// （原来的 insideWorkTree 已删除 —— 它给"项目内的 gitdir"开了绿灯，
+//   让 `.git` 文件指向嵌套仓库 `vendor/B/.git` 时也能写进 B。
+//   现在一律按 worktree/submodule 的完整路径段判定，不再有短路。）
 function resolveGitDir(projectPath) {
   const dotGit = join(projectPath, ".git");
   if (!existsSync(dotGit)) return null;
 
-  if (!statSync(dotGit).isFile()) return dotGit;
+  // .git 是符号链接 / junction 时**拒绝**。
+  // 正常的 .git 是目录（普通仓库）或文件（worktree/submodule 的 gitdir 指针），
+  // 不会是链接。链接可以指向任意位置——包括项目外的另一个仓库，
+  // 那样在 A 项目跑初始化就会把排除规则写进 B 仓库。
+  // 合法但少见的场景（.git 放别的盘）会看到明确的 skipped 原因，而不是被静默写错地方。
+  let st;
+  try {
+    st = lstatSync(dotGit);
+  } catch {
+    return null;
+  }
+  if (st.isSymbolicLink()) return null;
+
+  if (!st.isFile()) return dotGit;
 
   // .git 是文件 → 解析 gitdir:
   let content = "";
@@ -719,16 +769,17 @@ function resolveGitDir(projectPath) {
   }
   const m = content.match(/^gitdir:\s*(.+)$/m);
   if (!m) return null;
-  const privateDir = resolve(projectPath, m[1].trim());
-  if (!existsSync(privateDir) || !hasTrustedLayout(privateDir, projectPath)) return null;
+  // realpath：解开路径里的符号链接再判，否则链接能骗过下面所有字符串判据
+  const privateDir = realOrNull(resolve(projectPath, m[1].trim()));
+  if (!privateDir || !hasTrustedLayout(privateDir)) return null;
 
   // worktree 私有目录 → 跳到 common dir（普通仓库走到这里 privateDir === .git，
   // 其下没有 commondir 文件，视为普通仓库直接返回）
   const commonFile = join(privateDir, "commondir");
   if (!existsSync(commonFile)) return privateDir;
   try {
-    const common = resolve(privateDir, readFileSync(commonFile, "utf-8").trim());
-    return existsSync(common) ? common : privateDir;
+    const common = realOrNull(resolve(privateDir, readFileSync(commonFile, "utf-8").trim()));
+    return common && existsSync(common) ? common : privateDir;
   } catch {
     return privateDir;
   }
@@ -737,9 +788,35 @@ function resolveGitDir(projectPath) {
 function initGitExclude(projectPath, groups, extraEntries, rebuild) {
   const gitDir = resolveGitDir(projectPath);
   if (!gitDir) {
-    return { skipped: true, reason: "非 git 仓库" };
+    // 区分"不是 git 仓库"和"是 git 仓库但 .git 是链接（安全跳过）"，
+    // 否则用户会以为工具坏了。
+    let reason = "非 git 仓库";
+    try {
+      const dotGit = join(projectPath, ".git");
+      if (existsSync(dotGit) && lstatSync(dotGit).isSymbolicLink()) {
+        reason = ".git 是符号链接或 junction，为安全跳过 exclude 写入（它可能指向项目外的另一个仓库）";
+      }
+    } catch {
+      // 保持默认原因
+    }
+    return { skipped: true, reason };
   }
-  const excludePath = join(gitDir, "info", "exclude");
+  const infoDir = join(gitDir, "info");
+  const excludePath = join(infoDir, "exclude");
+
+  // info 或 exclude 本身是符号链接时也拒绝 —— 写入会穿透到链接目标，
+  // 那是项目外的位置。gitDir 已经过 realpath，但它的子路径仍可能是链接。
+  // 断链也要拦住（existsSync 对断链返回 false，不能用来做这个判断）。
+  if (isSymlink(infoDir)) {
+    return { skipped: true, reason: ".git/info 是符号链接，为安全跳过 exclude 写入" };
+  }
+  if (isSymlink(excludePath)) {
+    return { skipped: true, reason: ".git/info/exclude 是符号链接，为安全跳过" };
+  }
+  // 硬链接：写入会改到另一个路径下的同一份数据（NTFS 支持，git 文件不会是硬链接）
+  if (isHardLinked(excludePath)) {
+    return { skipped: true, reason: ".git/info/exclude 是硬链接，为安全跳过" };
+  }
 
   // 组顺序固定，保证多次运行写入顺序一致。
   // 默认开启 runtime/machine/index；agentsMd/claudeMd 默认关闭（文档应团队共享）。
