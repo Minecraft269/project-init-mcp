@@ -42,7 +42,26 @@ function resolveBash() {
 const BASH_PATH = resolveBash();
 
 // 在 PATH 里找一个可执行文件。找不到返回 null。
+//
+// Windows 优先用 where.exe —— 它认 PATHEXT，能找到 .cmd/.exe；
+// Git Bash 的 `command -v` 只看无扩展名的可执行文件，找不到 .cmd。
 function whichOnPath(name) {
+  if (process.platform === "win32") {
+    try {
+      const r = execSync(`where.exe ${name}`, {
+        encoding: "utf-8",
+        timeout: 5000,
+        shell: BASH_PATH,
+      });
+      const p = r
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean)[0];
+      if (p) return p;
+    } catch {
+      // 落到 command -v 再试一次
+    }
+  }
   try {
     const r = execSync(`command -v ${name}`, {
       encoding: "utf-8",
@@ -572,7 +591,19 @@ async function initCodeGraph(projectPath, force) {
       reason: `找不到 CodeGraph：请设置环境变量 ${ENV_CODEGRAPH}，或确保 codegraph 在 PATH 上`,
     };
   }
-  const cgCmd = cg.endsWith(".js") ? `node "${cg}"` : `"${cg}"`;
+  // 统一成一条能在 Git Bash 里执行的命令：
+  //   .js             -> node "<path>"
+  //   .cmd/.bat       -> Git Bash 不能直接执行，找同目录的 .js sibling；没有才用 cmd //c
+  //   其它（.exe 等） -> 直接执行
+  let cgCmd;
+  if (cg.endsWith(".js")) {
+    cgCmd = `node "${cg}"`;
+  } else if (/\.(cmd|bat)$/i.test(cg)) {
+    const jsSibling = cg.replace(/\.(cmd|bat)$/i, ".js");
+    cgCmd = existsSync(jsSibling) ? `node "${jsSibling}"` : `cmd //c "${cg}"`;
+  } else {
+    cgCmd = `"${cg}"`;
+  }
   const result = run(`${cgCmd} ${sub}`, {
     cwd: projectPath,
     timeout: 60000,

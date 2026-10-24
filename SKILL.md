@@ -166,5 +166,17 @@ CLAUDE.md 之外的包管理器配置、`/caveman-discover` 工作流发现、`a
 - `CLAUDE.md` 是非 UTF-8 编码（如 GBK）时**跳过不改动**并回报 —— 托管片段要按字节切位置，不可逆的解码会毁掉用户原文
 - `.git` 文件里的 `gitdir:` 是仓库内容、可被伪造。指向项目外时必须具备合法布局才认：worktree（有 `commondir`）或 submodule（路径在 `.git/modules/` 下且有 `config`）
 - 各步骤有失败时返回 `isError`，标题会写明"有 N 步失败"，不会假装全部成功
-- 改动本 skill 后需同步到 `~/.claude/skills/project-init/`（两个物理副本：源在 `.project-init/`，副本在 `claude-code-config/skills/project-init/`）
+- 改动本 skill 后无需手工同步 —— `~/.claude/skills/project-init/` 应是指向本仓库的**符号链接**
+
+## 外部依赖
+
+本工具**不捆绑**外部程序，按 `环境变量 > PATH > 常见安装位置` 顺序查找；找不到的步骤会跳过并说明原因。
+
+| 工具 | 环境变量 | 用途 |
+|---|---|---|
+| Git for Windows | `PROJECT_INIT_BASH` | 所有 git 操作 |
+| aoci-code | `PROJECT_INIT_AOCI_BIN` | 认知索引 |
+| CodeGraph | `PROJECT_INIT_CODEGRAPH_JS` | 代码图谱 |
+
+详见 `README.md` 的「依赖」与「免责声明」。
 
