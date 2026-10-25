@@ -188,14 +188,14 @@ CI 在 `.github/workflows/`：
 
 | Workflow | 触发 | 内容 |
 |---|---|---|
-| `ci.yml` | push / PR | ESLint + 测试矩阵（Ubuntu/Windows × Node 22/24） |
+| `ci.yml` | push / PR | ESLint + 测试矩阵（Ubuntu/Windows × Node 22/24）；矩阵内先源码编译 aoci 再跑测试 |
 | `codeql.yml` | push / PR / 每周一 | CodeQL 静态分析（`security-and-quality` 查询） |
 | `dependency-review.yml` | PR | 拦截新引入的高危漏洞依赖 |
 | `dependabot-auto-merge.yml` | Dependabot PR | 全部检查通过后自动 squash 合并；冲突时自动叫 Dependabot rebase |
 
 依赖更新由 `.github/dependabot.yml` 每周检查（npm + GitHub Actions）。
 
-CI 上没有 aoci / codegraph，相关步骤会自动跳过；本机安装的 skill 目录不存在时，副本一致性检查也会跳过而非失败。
+CI 会克隆 aoci-code 上游 `main` 用 `go build` 自行编译（与本地用法一致，追最新），然后跑全量测试；**aoci 相关用例走真实路径，一旦被跳过就直接判失败**。上游改坏导致红时，把 `AOCI_REF` 固定成某个 tag 即可定位。codegraph 仍未安装，相关步骤跳过；本机安装的 skill 目录不存在时，副本一致性检查跳过而非失败。
 
 ## 测试
 
