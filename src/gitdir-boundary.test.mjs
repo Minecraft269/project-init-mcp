@@ -423,10 +423,16 @@ const check = (name, got, want) => {
   if (linked) {
     const r = await callProjectInit(proj);
     const text = r?.result?.content?.[0]?.text || "";
-    check("用例15 给出可读原因", text.includes("不是可信任的 git 仓库"), true);
-    check("用例15 不再透传 git 原始 stderr", text.includes("fatal: not a git repository"), false);
-    check("用例15 该步骤仍标记为失败",
-      /"step": "初始化 aoci-code"[\s\S]{0,200}"success": false/.test(text), true);
+    // CI 上没有 aoci → 这步是 skipped("找不到 aoci")，压根不会走到失败分支，
+    // 前提不成立，跳过而不是判失败。
+    if (/"step": "初始化 aoci-code"[\s\S]{0,300}找不到 aoci/.test(text)) {
+      console.log("  skip 用例15：aoci 不可用，无从验证失败提示");
+    } else {
+      check("用例15 给出可读原因", text.includes("不是可信任的 git 仓库"), true);
+      check("用例15 不再透传 git 原始 stderr", text.includes("fatal: not a git repository"), false);
+      check("用例15 该步骤仍标记为失败",
+        /"step": "初始化 aoci-code"[\s\S]{0,200}"success": false/.test(text), true);
+    }
   }
 }
 
