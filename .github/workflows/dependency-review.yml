@@ -15,7 +15,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # 公开仓库免费可用；私有仓库需要 GitHub Advanced Security。
       # 只拦"新引入的高危漏洞依赖"，不拦普通版本变动。
       - uses: actions/dependency-review-action@v5
