@@ -38,7 +38,10 @@ jobs:
               exit 0
             fi
             if [ "$total" -gt 0 ] && [ "$done" -eq "$total" ]; then
-              if gh pr merge "$PR" --squash --delete-branch; then
+              # 不带 --delete-branch：仓库已开启 delete_branch_on_merge，
+              # GitHub 合并时自己删。若再让 gh 删一次，分支已不存在会报警，
+              # 可能被下面的 if 误判成"合并不了"。
+              if gh pr merge "$PR" --squash; then
                 echo "已合并 #$PR"
               else
                 echo "合并不了（多半是冲突）→ 让 Dependabot rebase"
