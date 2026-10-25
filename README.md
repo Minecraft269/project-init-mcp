@@ -188,9 +188,12 @@ CI 在 `.github/workflows/`：
 
 | Workflow | 触发 | 内容 |
 |---|---|---|
-| `ci.yml` | push / PR | ESLint + 测试矩阵（Ubuntu/Windows × Node 20/22） |
+| `ci.yml` | push / PR | ESLint + 测试矩阵（Ubuntu/Windows × Node 22/24） |
 | `codeql.yml` | push / PR / 每周一 | CodeQL 静态分析（`security-and-quality` 查询） |
 | `dependency-review.yml` | PR | 拦截新引入的高危漏洞依赖 |
+| `dependabot-auto-merge.yml` | Dependabot PR | 全部检查通过后自动 squash 合并；冲突时自动叫 Dependabot rebase |
+
+依赖更新由 `.github/dependabot.yml` 每周检查（npm + GitHub Actions）。
 
 CI 上没有 aoci / codegraph，相关步骤会自动跳过；本机安装的 skill 目录不存在时，副本一致性检查也会跳过而非失败。
 

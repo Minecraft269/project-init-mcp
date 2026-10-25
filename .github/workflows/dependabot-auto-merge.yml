@@ -7,6 +7,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # 读 check-runs 需要 checks: read —— 不声明就是 none，API 会 403
+  checks: read
 
 jobs:
   auto-merge:
