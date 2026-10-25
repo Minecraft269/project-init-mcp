@@ -401,5 +401,34 @@ const check = (name, got, want) => {
   check("用例14 目标目录未创建 info", existsSync(join(target, "info")), false);
 }
 
+// ── 用例15：.git 是链接时，aoci 失败要给可读原因，而不是抛 git 原始 stderr ──
+// aoci 会因 "not a git repository" 失败，把 git 的 stderr 直接转给用户没有信息量；
+// 我们已知原因，就该说人话。success 仍必须是 false。
+{
+  const base = mkdtempSync(join(tmpdir(), "gd-aoci-msg-"));
+  const proj = join(base, "proj");
+  const victimGit = join(base, "victim-git");
+  mkdirSync(join(victimGit, "info"), { recursive: true });
+  writeFileSync(join(victimGit, "HEAD"), "ref: refs/heads/main");
+  mkdirSync(proj, { recursive: true });
+
+  let linked = false;
+  try {
+    symlinkSync(victimGit, join(proj, ".git"), "junction");
+    linked = true;
+  } catch {
+    console.log("  skip 用例15 无法创建 junction");
+  }
+
+  if (linked) {
+    const r = await callProjectInit(proj);
+    const text = r?.result?.content?.[0]?.text || "";
+    check("用例15 给出可读原因", text.includes("不是可信任的 git 仓库"), true);
+    check("用例15 不再透传 git 原始 stderr", text.includes("fatal: not a git repository"), false);
+    check("用例15 该步骤仍标记为失败",
+      /"step": "初始化 aoci-code"[\s\S]{0,200}"success": false/.test(text), true);
+  }
+}
+
 console.log(bad === 0 ? "\n全部通过" : `\n${bad} 个失败`);
 process.exit(bad ? 1 : 0);

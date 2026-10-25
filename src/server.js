@@ -592,9 +592,18 @@ async function initAociCode(projectPath, keepArtifacts) {
 
   writeManifest(projectPath, manifest);
 
-  return result.success
-    ? { success: true, message: "aoi-code 已初始化" }
-    : { success: false, message: result.output };
+  if (result.success) return { success: true, message: "aoi-code 已初始化" };
+  // aoci 失败时抛的是 git 自己的 stderr（"fatal: not a git repository"），
+  // 对用户没有信息量。我们明明知道原因，就直接说人话。
+  // 只改提示，success 仍是 false —— 失败就是失败。
+  if (!resolveGitDir(projectPath)) {
+    return {
+      success: false,
+      message:
+        "aoci 需要 git 仓库，但本项目不是可信任的 git 仓库（.git 不存在，或指向项目外/是符号链接），已跳过",
+    };
+  }
+  return { success: false, message: result.output };
 }
 
 // aoci init 生成的公共文件（不含 .gitignore，那个无条件还原）
