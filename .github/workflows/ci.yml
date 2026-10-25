@@ -46,34 +46,27 @@ jobs:
           git config --global user.email "ci@example.invalid"
           git config --global user.name "CI"
 
-      # 装真实的 aoci。不装的话相关用例会静默跳过，"验证"等于没发生 ——
-      # 之前就是这样在 CI 绿的情况下漏掉了 aoci 分支。
-      # Release 目前全是 pre-release，/releases/latest 会 404，只能列全部取第一个。
-      - name: Install aoci-code (Linux)
-        if: runner.os == 'Linux'
+      # 从源码编译 aoci —— 和本地用法一致（Release 全是 pre-release，落后主干）。
+      # 代价：CI 现在跟着上游 main 走，上游改坏了我们就会红。真出现时把 AOCI_REF
+      # 固定成某个 tag/分支再排查，不用改结构。
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+
+      - name: 编译 aoci-code（源码）
         shell: bash
+        env:
+          AOCI_REF: main
         run: |
           set -euo pipefail
-          TAG=$(curl -fsSL https://api.github.com/repos/aoci-spec/aoci-code/releases | jq -r '.[0].tag_name')
-          VER=${TAG#v}
+          git clone --depth 1 --branch "$AOCI_REF" https://github.com/aoci-spec/aoci-code "$RUNNER_TEMP/aoci-src"
+          echo "aoci 源码: $AOCI_REF @ $(git -C "$RUNNER_TEMP/aoci-src" rev-parse --short HEAD)"
           mkdir -p "$RUNNER_TEMP/bin"
-          curl -fsSL -o "$RUNNER_TEMP/aoci.tgz" \
-            "https://github.com/aoci-spec/aoci-code/releases/download/$TAG/aoci_${VER}_linux_amd64.tar.gz"
-          tar -xzf "$RUNNER_TEMP/aoci.tgz" -C "$RUNNER_TEMP/bin" aoci
-          chmod +x "$RUNNER_TEMP/bin/aoci"
+          OUT="$RUNNER_TEMP/bin/aoci"
+          if [ "$RUNNER_OS" = "Windows" ]; then OUT="$OUT.exe"; fi
+          ( cd "$RUNNER_TEMP/aoci-src" && go build -trimpath -o "$OUT" ./cmd/aoci )
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-
-      - name: Install aoci-code (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $tag = (Invoke-RestMethod 'https://api.github.com/repos/aoci-spec/aoci-code/releases')[0].tag_name
-          $ver = $tag -replace '^v',''
-          $zip = Join-Path $env:RUNNER_TEMP 'aoci.zip'
-          Invoke-WebRequest -Uri "https://github.com/aoci-spec/aoci-code/releases/download/$tag/aoci_${ver}_windows_amd64.zip" -OutFile $zip
-          $dest = Join-Path $env:RUNNER_TEMP 'aoci-bin'
-          Expand-Archive -Path $zip -DestinationPath $dest -Force
-          $dest | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       # 装不上就当场红，别让它悄悄退回"跳过"分支
       - name: 确认 aoci 可用
