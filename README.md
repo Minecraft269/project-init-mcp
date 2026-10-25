@@ -30,7 +30,7 @@ npm install
 | 工具 | 必需 | 用途 | 获取方式 |
 |---|---|---|---|
 | **Git for Windows** | 是 | 所有 git 操作走 Git Bash | https://git-scm.com/download/win |
-| **aoci-code** | 否 | 仓库级认知索引 | 从源码 `go build -o aoci.exe ./cmd/aoci`（无官方 Release） |
+| **aoci-code** | 否 | 仓库级认知索引 | [Release 预编译包](https://github.com/aoci-spec/aoci-code/releases)（Windows/Linux/macOS，amd64/arm64，附 SHA256SUMS 与 sigstore 签名）。目前均为 `rc` 预发布版，Release 落后于主干；要追最新就自己编译：`go build -o aoci.exe ./cmd/aoci` |
 | **CodeGraph** | 否 | 代码符号图谱 | 见其项目文档 |
 
 **可选工具缺失时对应步骤会跳过并说明原因**，不会中断整个初始化。
@@ -232,7 +232,7 @@ npm test
 | 工具 | 许可 | 获取 |
 |---|---|---|
 | **Git for Windows** | GPL-2.0 | https://git-scm.com/download/win |
-| **aoci-code** | 见其仓库 | 从源码构建（无官方 Release） |
+| **aoci-code** | FSL-1.1-MIT | https://github.com/aoci-spec/aoci-code/releases |
 | **CodeGraph** | 见其仓库 | 见其项目文档 |
 | **@modelcontextprotocol/sdk** | MIT | `npm install` |
 

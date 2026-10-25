@@ -29,7 +29,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        node: [20, 22]
+        # Node 20 已 EOL（2026-04），不再浪费 runner 时间测它；
+        # 24 是当前本地开发版本。
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
