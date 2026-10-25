@@ -46,6 +46,48 @@ jobs:
           git config --global user.email "ci@example.invalid"
           git config --global user.name "CI"
 
-      # aoci / codegraph 在 CI 上没有，相关步骤会自动跳过；
-      # 测试断言的是"缺失时优雅跳过"，不是"必须存在"。
-      - run: npm test
+      # 装真实的 aoci。不装的话相关用例会静默跳过，"验证"等于没发生 ——
+      # 之前就是这样在 CI 绿的情况下漏掉了 aoci 分支。
+      # Release 目前全是 pre-release，/releases/latest 会 404，只能列全部取第一个。
+      - name: Install aoci-code (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG=$(curl -fsSL https://api.github.com/repos/aoci-spec/aoci-code/releases | jq -r '.[0].tag_name')
+          VER=${TAG#v}
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL -o "$RUNNER_TEMP/aoci.tgz" \
+            "https://github.com/aoci-spec/aoci-code/releases/download/$TAG/aoci_${VER}_linux_amd64.tar.gz"
+          tar -xzf "$RUNNER_TEMP/aoci.tgz" -C "$RUNNER_TEMP/bin" aoci
+          chmod +x "$RUNNER_TEMP/bin/aoci"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Install aoci-code (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tag = (Invoke-RestMethod 'https://api.github.com/repos/aoci-spec/aoci-code/releases')[0].tag_name
+          $ver = $tag -replace '^v',''
+          $zip = Join-Path $env:RUNNER_TEMP 'aoci.zip'
+          Invoke-WebRequest -Uri "https://github.com/aoci-spec/aoci-code/releases/download/$tag/aoci_${ver}_windows_amd64.zip" -OutFile $zip
+          $dest = Join-Path $env:RUNNER_TEMP 'aoci-bin'
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          $dest | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # 装不上就当场红，别让它悄悄退回"跳过"分支
+      - name: 确认 aoci 可用
+        run: aoci --version
+
+      - name: 跑测试
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/test.log"
+          # aoci 已经在 PATH 上还出现"跳过用例"，说明它没真正参与验证
+          if grep -q "skip 用例" "$RUNNER_TEMP/test.log"; then
+            echo "::error::存在被跳过的用例 —— aoci 没有真正参与验证"
+            grep "skip 用例" "$RUNNER_TEMP/test.log"
+            exit 1
+          fi
+
