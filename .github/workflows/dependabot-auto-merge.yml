@@ -1,0 +1,49 @@
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    # 只处理 Dependabot 自己开的 PR —— 人工 PR 一律等人看
+    if: github.actor == 'dependabot[bot]'
+    name: Auto-merge
+    runs-on: ubuntu-latest
+    steps:
+      - name: 等其它检查全绿后 squash 合并
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # 不能用 `gh pr checks --watch`：本 job 自己的检查也在那个列表里，
+          # 会一直等自己 → 死锁。所以自己轮询并排除 "Auto-merge"。
+          for _ in $(seq 1 60); do
+            summary=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --jq '
+              [.check_runs[] | select(.name != "Auto-merge")] as $c
+              | "\($c | length) \([$c[] | select(.status == "completed")] | length) \([$c[] | select(.conclusion != null and .conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped")] | length)"')
+            read -r total done bad <<<"$summary"
+            echo "检查: $done/$total 完成，失败 $bad"
+            if [ "$bad" -gt 0 ]; then
+              echo "有检查失败 → 不合并，留给人看"
+              exit 0
+            fi
+            if [ "$total" -gt 0 ] && [ "$done" -eq "$total" ]; then
+              if gh pr merge "$PR" --squash --delete-branch; then
+                echo "已合并 #$PR"
+              else
+                echo "合并不了（多半是冲突）→ 让 Dependabot rebase"
+                gh pr comment "$PR" --body "@dependabot rebase"
+              fi
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "等待超时，未合并（不报错，留给人看）"
